@@ -1,2 +1,2 @@
-# soba
+# Soba
 JavaScript framework
