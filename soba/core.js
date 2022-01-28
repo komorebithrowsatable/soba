@@ -30,7 +30,7 @@ function SobaInstance() {
         }
 
         function ClassExtension(name, meta) {
-            if (!name) throw new Error("Extension needs name");
+            if (!name) throw new Error("Extension needs a name");
             this.name = name;
             if (typeof meta.implementation !== "function") throw new Error("Attribute extension must be a function");
             if ((meta.store !== undefined) && (typeof meta.store !== "function")) throw new Error("Extension.store must be a function");
