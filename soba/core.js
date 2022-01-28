@@ -1,5 +1,26 @@
 function SobaInstance() {
 
+    // enums
+
+    const enumManager = new function EnumManager() {
+        let enumber = 1;
+        this.next = function () {
+            return enumber++;
+        }
+    }()
+
+    function Enum() {
+        for (let i = 0; i < arguments.length; i++) {
+            if (typeof arguments[i] !== "string") throw new Error("Enum value must be a string");
+            this[arguments[i]] = enumManager.next();
+        }
+        Object.freeze(this);
+    }
+
+    // object manager
+
+    const basicExtensionTypes = new Enum("preInit", "sharedModifier", "perInheritance", "completeTrigger");
+
     function MetadataManager() {
         const metadataManager = this;
         const storage = {};
@@ -26,22 +47,40 @@ function SobaInstance() {
             }
 
             const representedClasses = metadataManager.getInheritanceChain(this);
-            const extendedAttributes = [];
+            Object.freeze(representedClasses);
+            this.representedClasses = representedClasses;
+            const ownExtenstions = [];
+            const extensions = [];
+            const extensionUniqueNames = [];
 
+            if (attributes.extensions) for (const extName in attributes.extensions) {
+                let extMeta = attributes.extensions[extName];
+                let extension = {};
+                extension.name = extName;
+                if (typeof extMeta.implementation !== "function") throw new Error("Attribute extension must be a function");
+                extension.implementation = extMeta.implementation;
+                if ((extMeta.store !== undefined) && (typeof extMeta.store !== "function")) throw new Error("Extention.store must be a function");
+                extension.store = extMeta.store;
+                if (typeof extMeta.type !== "number") throw new Error("Extension.type must be enum/integer");
+                extension.type = extMeta.type;
+                Object.freeze(extension);
+                ownExtenstions.push(extension);
+            }
+            Object.freeze(ownExtenstions);
+            this.ownExtenstions = ownExtenstions;
             for (const classMeta of representedClasses) {
-                if ((classMeta.extends) && (classMeta.extends.attributes instanceof Object)) for (const attrName in classMeta.extends.attributes) {
-                    if (extendedAttributes.indexOf(attrName) !== -1) throw new Error("This attribute overflows another one with the same name");
-                    if (typeof classMeta.extends.attributes[attrName] !== "function") throw new Error("Attribute extension must contain implemetation (function)");
-                    extendedAttributes.push(attrName);
+                for (ext of classMeta.ownExtenstions) {
+                    if (extensions.indexOf(ext) != -1) continue;
+                    if (extensionUniqueNames.indexOf(ext.name) != -1) throw new Error("Extension conflict: extension with name " + ext.name + " already used");
+                    extensions.push(ext);
+                    extensionUniqueNames.push(ext.name);
                 }
             };
-            for (const attrName of extendedAttributes) {
-                if (attributes[attrName] !== undefined) this[attrName] = attributes[attrName];
-            };
-            Object.freeze(representedClasses);
-            Object.freeze(extendedAttributes);
-            this.representedClasses = representedClasses;
-            this.extendedAttributes = extendedAttributes;
+            Object.freeze(extensions);
+            extensions.filter(function (ext) { return !!ext.store }).forEach(function (ext) {
+                if (attributes[ext.name] !== undefined) this[ext.name] = ext.store(attributes[ext.name]);
+            }, this);
+            this.extensions = extensions;
             Object.freeze(this);
         }
 
@@ -87,11 +126,13 @@ function SobaInstance() {
         }
     }
 
+    // basic class implementation
+
     function Basic(classMeta, initValues = {}) {
         const self = this;
         Object.defineProperty(self, "metadata", { value: classMeta, configurable: false, writable: false, enumerable: true });
 
-        // shared modifiers
+        // shared
         const shared = {};
 
         function addToShared(keyValue) {
@@ -101,72 +142,116 @@ function SobaInstance() {
             }
         }
 
-        addToShared({ classMeta, self, initValues })
+        addToShared({ classMeta, self, initValues });
 
-        for (const representedClass of classMeta.representedClasses) {
-            if (!representedClass.extends) continue;
-            if (typeof representedClass.extends.shared !== "function") throw new Error("Shared modifier implementation must be a function");
-            addToShared(representedClass.extends.shared(shared));
+        // sort extensions by type
+        const extByType = {};
+        for (const type in basicExtensionTypes) {
+            extByType[basicExtensionTypes[type]] = [];
+        }
+        for (const extension of classMeta.extensions) {
+            extByType[extension.type].push(extension);
+        }
+
+        // preinits
+        for (const ext of extByType[basicExtensionTypes.preInit]) {
+            let res = ext.implementation.apply(self, [shared]);
+            if (res !== undefined) return res;    // an ability to interrupt init and return another object or value, useful for singletons and similar cases
+        }
+
+        //shared modifiers
+        for (const ext of extByType[basicExtensionTypes.sharedModifier]) {
+            let res = ext.implementation.apply(self, [shared]);
+            if (res) addToShared(res);
         };
 
         // metadata attrubutes
-        const attributeImplementations = {};
-
-        console.log(classMeta.representedClasses)
         for (const representedClass of classMeta.representedClasses) {
-            console.log(representedClass)
-            if (!representedClass.extends) continue;
-            if (!representedClass.extends.attributes) continue;
-            Object.keys(representedClass.extends.attributes).forEach(function (attrName) {
-                let implementation = representedClass.extends.attributes[attrName];
-                if (typeof implementation !== "function") throw new Error("Attribute implementation must be a function");
-                if (attributeImplementations[attrName]) throw new Error("This attribute overflows another one with the same name");
-                attributeImplementations[attrName] = implementation;
-            });
-        }
-
-
-        for (const representedClass of classMeta.representedClasses) {
-            for (attrName of representedClass.extendedAttributes) {
-                attributeImplementations[attrName].apply(self, [representedClass, shared]);
+            for (const ext of extByType[basicExtensionTypes.perInheritance]) {
+                ext.implementation.apply(self, [representedClass, shared]);
             };
         }
 
         // complete triggers
-        for (let i = classMeta.representedClasses.length - 1; i >= 0; i--) {
-            let representedClass = classMeta.representedClasses[i];
-            if ((representedClass.extends) && (typeof representedClass.extends.complete === "function")) representedMeta.extends.complete.apply(self, [shared])
-        }
+        for (let i = extByType[basicExtensionTypes.completeTrigger].length - 1; i >= 0; i--) {
+            let ext = extByType[basicExtensionTypes.completeTrigger][i];
+            ext.implementation.apply(self, [shared]);
+        };
     }
 
     const metadataManager = new MetadataManager();
 
+    const inheritableStaticDataStorage = new function () {
+        const self = this;
+        const singletons = {};
+
+        self.registerSingleton = function (singleton) {
+            if (singletons[singleton.metadata.classId]) throw new Error("An attempt to register second singleton of class " + singleton.metadata.classId);
+            singletons[singleton.metadata.classId] = singleton;
+        }
+        self.getSingleton = function (classId) {
+            console.log("get", classId, singletons)
+            return singletons[classId];
+        }
+        Object.freeze(self);
+    }()
+
     metadataManager.define("inheritable", 1, {
-        extends: {
-            shared: function ({ classMeta }) {
-                let protected = {};
-                return { protected };
+        extensions: {
+            protected: {
+                implementation: function () {
+                    return { protected: {} }
+                },
+                type: basicExtensionTypes.sharedModifier
             },
-            attributes: {
-                create: function (classMeta, shared) {
-                    if (typeof classMeta.create != "function") throw new Error("Class constuctor must be a function");
+            create: {
+                store: function (value) {
+                    if ((typeof value !== "function") && (value !== null) && (value !== undefined)) throw new Error("Class constructor must be a function or null/undefined");
+                    return value;
+                },
+                implementation: function (classMeta, shared) {
                     shared.protected[classMeta.name] = {};
                     classMeta.create.apply(shared.self, [shared]);
                     Object.freeze(shared.protected[classMeta.name]);
-                }
+                },
+                type: basicExtensionTypes.perInheritance
+            },
+            abstract: {
+                store: function (value) {
+                    return !!value;
+                },
+                implementation: function ({ self }) {
+                    if (self.metadata.abstract) throw new Error("Abstract classes can only be inherited");
+                },
+                type: basicExtensionTypes.preInit
+            },
+            singleton: {
+                store: function (value) {
+                    return !!value;
+                },
+                implementation: function ({ self }) {
+                    if (self.metadata.singleton) {
+                        let instance = inheritableStaticDataStorage.getSingleton(self.metadata.classId);
+                        console.log("CHECKSINGLETON", instance, self)
+                        if (instance) return instance;
+                        else inheritableStaticDataStorage.registerSingleton(self);
+                    }
+                },
+                type: basicExtensionTypes.preInit
             }
         },
         create: function (shared) {
-            console.log("INheritable constructor", shared);
-        }
+            console.log("INheritable constructor");
+        },
     });
 
     metadataManager.define("objectmanager", 1, {
         inherits: { "inheritable": 1 },
         create: function (shared) {
-            console.log("Objectmanager constructor", shared);
-        }
-    })
+            console.log("Objectmanager constructor");
+        },
+        singleton: true
+    });
 
     return new Basic(metadataManager.getClassMetadata("objectmanager", 1));
 
