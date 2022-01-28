@@ -29,6 +29,18 @@ function SobaInstance() {
             return String(name) + ":" + String(version);
         }
 
+        function ClassExtension(name, meta) {
+            if (!name) throw new Error("Extension needs name");
+            this.name = name;
+            if (typeof meta.implementation !== "function") throw new Error("Attribute extension must be a function");
+            if ((meta.store !== undefined) && (typeof meta.store !== "function")) throw new Error("Extention.store must be a function");
+            if (typeof meta.type !== "number") throw new Error("Extension.type must be enum/integer");
+            this.store = meta.store;
+            this.implementation = meta.implementation;
+            this.type = meta.type;
+            Object.freeze(this)
+        }
+
         function ClassMetadata(name, version, attributes) {
             this.classId = metadataManager.createClassId(name, version);
             this.name = name;
@@ -52,17 +64,7 @@ function SobaInstance() {
             const extensionUniqueNames = [];
 
             if (attributes.extensions) for (const extName in attributes.extensions) {
-                let extMeta = attributes.extensions[extName];
-                let extension = {};
-                extension.name = extName;
-                if (typeof extMeta.implementation !== "function") throw new Error("Attribute extension must be a function");
-                extension.implementation = extMeta.implementation;
-                if ((extMeta.store !== undefined) && (typeof extMeta.store !== "function")) throw new Error("Extention.store must be a function");
-                extension.store = extMeta.store;
-                if (typeof extMeta.type !== "number") throw new Error("Extension.type must be enum/integer");
-                extension.type = extMeta.type;
-                Object.freeze(extension);
-                ownExtenstions.push(extension);
+                ownExtenstions.push(new ClassExtension(extName, attributes.extensions[extName]));
             }
             Object.freeze(ownExtenstions);
             this.ownExtenstions = ownExtenstions;
@@ -208,7 +210,7 @@ function SobaInstance() {
             },
             static: {
                 implementation: function ({self}) {
-                    return { static: basicExtensionTypes.getStaticSpace(self) }
+                    return { static: inheritableStaticDataStorage.getStaticSpace(self) }
                 },
                 type: basicExtensionTypes.sharedModifier
             },
