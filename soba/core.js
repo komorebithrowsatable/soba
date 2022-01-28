@@ -184,14 +184,18 @@ function SobaInstance() {
     const inheritableStaticDataStorage = new function () {
         const self = this;
         const singletons = {};
+        const staticSpaces = {};
 
         self.registerSingleton = function (singleton) {
             if (singletons[singleton.metadata.classId]) throw new Error("An attempt to register second singleton of class " + singleton.metadata.classId);
             singletons[singleton.metadata.classId] = singleton;
         }
         self.getSingleton = function (classId) {
-            console.log("get", classId, singletons)
             return singletons[classId];
+        }
+        self.getStaticSpace = function(object) {
+            if (!staticSpaces[object.metadata.classId]) staticSpaces[object.metadata.classId] = {};
+            return staticSpaces[object.metadata.classId];
         }
         Object.freeze(self);
     }()
@@ -201,6 +205,12 @@ function SobaInstance() {
             protected: {
                 implementation: function () {
                     return { protected: {} }
+                },
+                type: basicExtensionTypes.sharedModifier
+            },
+            static: {
+                implementation: function ({self}) {
+                    return { static: basicExtensionTypes.getStaticSpace(self) }
                 },
                 type: basicExtensionTypes.sharedModifier
             },
@@ -247,10 +257,10 @@ function SobaInstance() {
 
     metadataManager.define("objectmanager", 1, {
         inherits: { "inheritable": 1 },
+        singleton: true,
         create: function (shared) {
             console.log("Objectmanager constructor");
         },
-        singleton: true
     });
 
     return new Basic(metadataManager.getClassMetadata("objectmanager", 1));
