@@ -33,7 +33,7 @@ function SobaInstance() {
             if (!name) throw new Error("Extension needs name");
             this.name = name;
             if (typeof meta.implementation !== "function") throw new Error("Attribute extension must be a function");
-            if ((meta.store !== undefined) && (typeof meta.store !== "function")) throw new Error("Extention.store must be a function");
+            if ((meta.store !== undefined) && (typeof meta.store !== "function")) throw new Error("Extension.store must be a function");
             if (typeof meta.type !== "number") throw new Error("Extension.type must be enum/integer");
             this.store = meta.store;
             this.implementation = meta.implementation;
