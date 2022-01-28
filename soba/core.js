@@ -1,7 +1,6 @@
 function SobaInstance() {
 
     // enums
-
     const enumManager = new function EnumManager() {
         let enumber = 1;
         this.next = function () {
@@ -17,8 +16,7 @@ function SobaInstance() {
         Object.freeze(this);
     }
 
-    // object manager
-
+    // metadata manager
     const basicExtensionTypes = new Enum("preInit", "sharedModifier", "perInheritance", "completeTrigger");
 
     function MetadataManager() {
@@ -127,7 +125,6 @@ function SobaInstance() {
     }
 
     // basic class implementation
-
     function Basic(classMeta, initValues = {}) {
         const self = this;
         Object.defineProperty(self, "metadata", { value: classMeta, configurable: false, writable: false, enumerable: true });
@@ -181,6 +178,7 @@ function SobaInstance() {
 
     const metadataManager = new MetadataManager();
 
+    //basic classes
     const inheritableStaticDataStorage = new function () {
         const self = this;
         const singletons = {};
@@ -242,7 +240,6 @@ function SobaInstance() {
                 implementation: function ({ self }) {
                     if (self.metadata.singleton) {
                         let instance = inheritableStaticDataStorage.getSingleton(self.metadata.classId);
-                        console.log("CHECKSINGLETON", instance, self)
                         if (instance) return instance;
                         else inheritableStaticDataStorage.registerSingleton(self);
                     }
