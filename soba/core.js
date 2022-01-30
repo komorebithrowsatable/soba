@@ -59,17 +59,17 @@ function SobaInstance() {
             const representedClasses = metadataManager.getInheritanceChain(this);
             Object.freeze(representedClasses);
             this.representedClasses = representedClasses;
-            const ownExtenstions = [];
+            const ownExtensions = [];
             const extensions = [];
             const extensionUniqueNames = [];
 
             if (attributes.extensions) for (const extName in attributes.extensions) {
-                ownExtenstions.push(new ClassExtension(extName, attributes.extensions[extName]));
+                ownExtensions.push(new ClassExtension(extName, attributes.extensions[extName]));
             }
-            Object.freeze(ownExtenstions);
-            this.ownExtenstions = ownExtenstions;
+            Object.freeze(ownExtensions);
+            this.ownExtensions = ownExtensions;
             for (const classMeta of representedClasses) {
-                for (ext of classMeta.ownExtenstions) {
+                for (ext of classMeta.ownExtensions) {
                     if (extensions.indexOf(ext) != -1) continue;
                     if (extensionUniqueNames.indexOf(ext.name) != -1) throw new Error("Extension conflict: extension with name " + ext.name + " already used");
                     extensions.push(ext);
