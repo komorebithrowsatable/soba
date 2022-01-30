@@ -1,17 +1,16 @@
 function SobaInstance() {
 
     // enums
-    const enumManager = new function EnumManager() {
-        let enumber = 1;
-        this.next = function () {
-            return enumber++;
-        }
-    }()
+    function EnumVariant(parent, name) {
+        this.parent = parent;
+        this.name = name;
+        Object.freeze(this);
+    }
 
     function Enum() {
         for (let i = 0; i < arguments.length; i++) {
             if (typeof arguments[i] !== "string") throw new Error("Enum value must be a string");
-            this[arguments[i]] = enumManager.next();
+            this[arguments[i]] = new EnumVariant(this, arguments[i]);
         }
         Object.freeze(this);
     }
@@ -34,7 +33,7 @@ function SobaInstance() {
             this.name = name;
             if (typeof meta.implementation !== "function") throw new Error("Attribute extension must be a function");
             if ((meta.store !== undefined) && (typeof meta.store !== "function")) throw new Error("Extension.store must be a function");
-            if (typeof meta.type !== "number") throw new Error("Extension.type must be enum/integer");
+            if (!(meta.type instanceof EnumVariant)) throw new Error("Extension.type must be enum variant");
             this.store = meta.store;
             this.implementation = meta.implementation;
             this.type = meta.type;
@@ -146,34 +145,34 @@ function SobaInstance() {
         // sort extensions by type
         const extByType = {};
         for (const type in basicExtensionTypes) {
-            extByType[basicExtensionTypes[type]] = [];
+            extByType[type] = [];
         }
         for (const extension of classMeta.extensions) {
-            extByType[extension.type].push(extension);
+            extByType[extension.type.name].push(extension);
         }
 
         // preinits
-        for (const ext of extByType[basicExtensionTypes.preInit]) {
+        for (const ext of extByType[basicExtensionTypes.preInit.name]) {
             let res = ext.implementation.apply(self, [shared]);
             if (res !== undefined) return res;    // an ability to interrupt init and return another object or value, useful for singletons and similar cases
         }
 
         //shared modifiers
-        for (const ext of extByType[basicExtensionTypes.sharedModifier]) {
+        for (const ext of extByType[basicExtensionTypes.sharedModifier.name]) {
             let res = ext.implementation.apply(self, [shared]);
             if (res) addToShared(res);
         };
 
         // metadata attrubutes
         for (const representedClass of classMeta.representedClasses) {
-            for (const ext of extByType[basicExtensionTypes.perInheritance]) {
+            for (const ext of extByType[basicExtensionTypes.perInheritance.name]) {
                 ext.implementation.apply(self, [representedClass, shared]);
             };
         }
 
         // complete triggers
-        for (let i = extByType[basicExtensionTypes.completeTrigger].length - 1; i >= 0; i--) {
-            let ext = extByType[basicExtensionTypes.completeTrigger][i];
+        for (let i = extByType[basicExtensionTypes.completeTrigger.name].length - 1; i >= 0; i--) {
+            let ext = extByType[basicExtensionTypes.completeTrigger.name][i];
             ext.implementation.apply(self, [shared]);
         };
     }
