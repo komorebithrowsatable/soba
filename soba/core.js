@@ -130,7 +130,7 @@ function SobaInstance() {
     }
 
     // basic class implementation
-    function Basic(classMeta, initValues = {}) {
+    function SobaObject(classMeta, initValues = {}) {
         const self = this;
         Object.defineProperty(self, "metadata", { value: classMeta, configurable: false, writable: false, enumerable: true });
 
@@ -366,7 +366,7 @@ function SobaInstance() {
                 perInheritance: function (classMeta, {self}) {
                     console.log("registering events for ", classMeta.name)
                     function registerEvent(eventName) {
-                        let eventInstance = new Basic(metadataManager.getClassMetadata("event", 1));
+                        let eventInstance = new SobaObject(metadataManager.getClassMetadata("event", 1));
                         self.events[classMeta.name][eventName] = eventInstance;
                     }
                     if (!self.events) self.events = {};
@@ -435,7 +435,7 @@ function SobaInstance() {
         },
     });
 
-    return new Basic(metadataManager.getClassMetadata("objectmanager", 1));
+    return new SobaObject(metadataManager.getClassMetadata("objectmanager", 1));
 
 }
 
