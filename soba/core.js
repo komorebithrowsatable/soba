@@ -305,6 +305,7 @@ function SobaInstance() {
         inherits: { "inheritable": 1 },
         create: function ({ self }) {
             const subsribers = [];
+            let muted = false;
             self.on = function (func) {
                 if (subsribers.indexOf(func) != -1) return;
                 subsribers.push(func);
@@ -317,12 +318,39 @@ function SobaInstance() {
             self.emit = function (sender, arg) {
                 for (let subscriber of subsribers) subscriber.apply(sender, [sender, arg]);
             }
-            Object.defineProperty("subscribers", {
-                get: function () {
-                    return subsribers.slice();
+            self.mute = function() {
+                self.muted = true;
+            }
+            self.unmute = function() {
+                self.unmuted = false;
+            }
+            self.runMuted = function(func) {
+                self.muted = true;
+                func();
+                self.muted = false;
+            }
+            self.once = function(func) {
+                self.on(function onceHandler() {
+                    func();
+                    self.off(onceHandler);
+                })
+            }
+            Object.defineProperties(self, {
+                subsribers: {
+                    get: function () {
+                        return subsribers.slice();
+                    },
+                    set: function (func) {
+                        self.subscribe(func);
+                    }
                 },
-                set: function (func) {
-                    self.subscribe(func);
+                muted: {
+                    get: function() {
+                        return muted;
+                    },
+                    set: function(val) {
+                        muted = !!val;
+                    }
                 }
             })
         }
@@ -335,12 +363,20 @@ function SobaInstance() {
                     if (!Array.isArray(value)) throw new Error("Events list must be an array");
                     return value;
                 },
-                perInheritance: function (classMeta, shared) {
+                perInheritance: function (classMeta, {self}) {
+                    console.log("registering events for ", classMeta.name)
+                    function registerEvent(eventName) {
+                        let eventInstance = new Basic(metadataManager.getClassMetadata("event", 1));
+                        self.events[classMeta.name][eventName] = eventInstance;
+                    }
                     if (!self.events) self.events = {};
                     self.events[classMeta.name] = {};
-                    for (let eventName in classMeta.events) {
-                        let eventObject = new Basic(metadataManager.getClassMetadata("event", 1));
-                        self.events[classMeta.name][eventName] = eventObject;
+                    if (classMeta.events) for (let eventName of classMeta.events) registerEvent(eventName);
+                    if (classMeta.troperties) {
+                        let keys = Object.keys(classMeta.troperties);
+                        keys.forEach(function(key) {
+                            registerEvent(key+"Changed");
+                        })
                     }
                     Object.freeze(self.events[classMeta.name])
                 },
@@ -348,11 +384,51 @@ function SobaInstance() {
                     Object.freeze(self.events);
                 }
             },
+            troperties: {
+                store: function (value) {
+                    if (!(value instanceof Object)) throw new Error("Troperties must be a key value");
+                    return value;
+                },
+                perInheritance: function (classMeta, {self}) {
+                    if (!classMeta.troperties) return;
+                    let keys = Object.keys(classMeta.troperties);
+                    keys.forEach(function(key) {
+                        Object.defineProperty(self, key, {
+                            get: function() {
+                                return value;
+                            },
+                            set: function(newValue) {
+                                if (newValue===value) return;
+                                value = newValue;
+                                self.events[classMeta.name][eventName].emit();
+                            }
+                        });
+                    })
+                },
+            }
+        }
+    })
+
+    metadataManager.define("basic", 1, {
+        inherits: {
+            "events": 1,
+            "paths": 1,
+            "inheritable": 1,
+        },
+        events: ["completed", "unref"],
+        tropperties: {
+            parent: null,
+        },
+        create: function({self, protected}) {
+            self.events.basic.completed.emit();
+        },
+        unref: function() {
+            self.events.basic.unref.emit();
         }
     })
 
     metadataManager.define("objectmanager", 1, {
-        inherits: { "inheritable": 1 },
+        inherits: { "basic": 1 },
         singleton: true,
         create: function (shared) {
             console.log("Objectmanager constructor");
