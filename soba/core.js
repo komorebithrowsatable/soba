@@ -16,7 +16,6 @@ function SobaInstance() {
     }
 
     // metadata manager
-    const basicExtensionTypes = new Enum("preInit", "sharedModifier", "perInheritance", "completeTrigger");
 
     function MetadataManager() {
         const metadataManager = this;
@@ -31,11 +30,16 @@ function SobaInstance() {
         function ClassExtension(name, meta) {
             if (!name) throw new Error("Extension needs a name");
             this.name = name;
-            if (typeof meta.implementation !== "function") throw new Error("Attribute extension must be a function");
             if ((meta.store !== undefined) && (typeof meta.store !== "function")) throw new Error("Extension.store must be a function");
-            if (!(meta.type instanceof EnumVariant)) throw new Error("Extension.type must be enum variant");
+            if ((meta.preInitialize !== undefined) && (typeof meta.preInitialize !== "function")) throw new Error("Extension.preInitialize must be a function");
+            if ((meta.sharedModifiers !== undefined) && (typeof meta.sharedModifiers !== "function")) throw new Error("Extension.sharedModifiers must be a function");
+            if ((meta.perInheritance !== undefined) && (typeof meta.perInheritance !== "function")) throw new Error("Extension.perInheritance must be a function");
+            if ((meta.complete !== undefined) && (typeof meta.complete !== "function")) throw new Error("Extension.complete must be a function");
             this.store = meta.store;
-            this.implementation = meta.implementation;
+            this.preInitialize = meta.preInitialize;
+            this.sharedModifiers = meta.sharedModifiers;
+            this.perInheritance = meta.perInheritance;
+            this.completed = meta.completed;
             this.type = meta.type;
             Object.freeze(this)
         }
@@ -142,44 +146,41 @@ function SobaInstance() {
 
         addToShared({ classMeta, self, initValues });
 
-        // sort extensions by type
-        const extByType = {};
-        for (const type in basicExtensionTypes) {
-            extByType[type] = [];
-        }
-        for (const extension of classMeta.extensions) {
-            extByType[extension.type.name].push(extension);
-        }
-
         // preinits
-        for (const ext of extByType[basicExtensionTypes.preInit.name]) {
-            let res = ext.implementation.apply(self, [shared]);
+        for (const ext of classMeta.extensions) {
+            if (!ext.preInitialize) continue;
+            let res = ext.preInitialize.apply(self, [shared]);
             if (res !== undefined) return res;    // an ability to interrupt init and return another object or value, useful for singletons and similar cases
         }
 
         //shared modifiers
-        for (const ext of extByType[basicExtensionTypes.sharedModifier.name]) {
-            let res = ext.implementation.apply(self, [shared]);
+        for (const ext of classMeta.extensions) {
+            if (!ext.sharedModifiers) continue;
+            let res = ext.sharedModifiers.apply(self, [shared]);
             if (res) addToShared(res);
         };
 
-        // metadata attrubutes
+        // metadata attributes
         for (const representedClass of classMeta.representedClasses) {
-            for (const ext of extByType[basicExtensionTypes.perInheritance.name]) {
-                ext.implementation.apply(self, [representedClass, shared]);
+            for (const ext of representedClass.extensions) {
+                if (!ext.perInheritance) continue;
+                ext.perInheritance.apply(self, [representedClass, shared]);
             };
         }
 
         // complete triggers
-        for (let i = extByType[basicExtensionTypes.completeTrigger.name].length - 1; i >= 0; i--) {
-            let ext = extByType[basicExtensionTypes.completeTrigger.name][i];
-            ext.implementation.apply(self, [shared]);
+        for (let i = classMeta.extensions.length - 1; i >= 0; i--) {
+            let ext = classMeta.extensions[i];
+            if (!ext.complete) continue;
+            ext.complete.apply(self, [shared]);
         };
     }
 
     const metadataManager = new MetadataManager();
 
     //basic classes
+    // inheritance
+
     const inheritableStaticDataStorage = new function () {
         const self = this;
         const singletons = {};
@@ -192,7 +193,7 @@ function SobaInstance() {
         self.getSingleton = function (classId) {
             return singletons[classId];
         }
-        self.getStaticSpace = function(object) {
+        self.getStaticSpace = function (object) {
             if (!staticSpaces[object.metadata.classId]) staticSpaces[object.metadata.classId] = {};
             return staticSpaces[object.metadata.classId];
         }
@@ -202,56 +203,153 @@ function SobaInstance() {
     metadataManager.define("inheritable", 1, {
         extensions: {
             protected: {
-                implementation: function () {
+                sharedModifiers: function () {
                     return { protected: {} }
                 },
-                type: basicExtensionTypes.sharedModifier
             },
             static: {
-                implementation: function ({self}) {
+                SharedArrayBuffer: function ({ self }) {
                     return { static: inheritableStaticDataStorage.getStaticSpace(self) }
                 },
-                type: basicExtensionTypes.sharedModifier
             },
             create: {
                 store: function (value) {
                     if ((typeof value !== "function") && (value !== null) && (value !== undefined)) throw new Error("Class constructor must be a function or null/undefined");
                     return value;
                 },
-                implementation: function (classMeta, shared) {
+                perInheritance: function (classMeta, shared) {
                     shared.protected[classMeta.name] = {};
                     classMeta.create.apply(shared.self, [shared]);
                     Object.freeze(shared.protected[classMeta.name]);
                 },
-                type: basicExtensionTypes.perInheritance
             },
             abstract: {
                 store: function (value) {
                     return !!value;
                 },
-                implementation: function ({ self }) {
+                preInitialize: function ({ self }) {
                     if (self.metadata.abstract) throw new Error("Abstract classes can only be inherited");
                 },
-                type: basicExtensionTypes.preInit
             },
             singleton: {
                 store: function (value) {
                     return !!value;
                 },
-                implementation: function ({ self }) {
+                preInitialize: function ({ self }) {
                     if (self.metadata.singleton) {
                         let instance = inheritableStaticDataStorage.getSingleton(self.metadata.classId);
                         if (instance) return instance;
                         else inheritableStaticDataStorage.registerSingleton(self);
                     }
                 },
-                type: basicExtensionTypes.preInit
+            },
+            completed: {
+                completed: function({self}) {
+                    Object.freeze(self);
+                },
             }
         },
         create: function (shared) {
             console.log("INheritable constructor");
         },
     });
+
+    // paths
+    function Path(read, write) {
+        if ((typeof read === "string") && (write === undefined)) write = read;
+        if ((typeof read !== "string") && (typeof read !== "function")) throw new Error("Path.read must be a string or a function");
+        this.read = read;
+        this.readonly = (write === undefined);
+        this.write = (this.readonly) ? null : write;
+        Object.freeze(this);
+    }
+
+    metadataManager.define("paths", 1, {
+        inherits: { "inheritable": 1 },
+        create: function ({ self, protected }) {
+            protected.paths.read = function (rootObject, path) {
+                if (path instanceof Path) path = path.read;
+                if (typeof path === "string") {
+                    if (path.startsWith("@value:")) return path.substring(7);
+                    if (path == "@root") return rootObject;
+                    return path.split(".").reduce(function (ref, element) { return ref[element] }, rootObject);
+                }
+                if (typeof path === "function") {
+                    return path.apply(rootObject, Array.from(arguments));
+                }
+                throw new Error("Wrong path specification");
+            }
+            protected.paths.write = function (rootObject, path, value, create) {
+                if (path instanceof Path) path = path.write;
+                if (typeof path === "string") {
+                    let parts = path.split(".");
+                    let reference = rootObject;
+                    for (let i = 0; i < keys.length - 1; i++) {
+                        let key = parts[i];
+                        if ((create) && (reference[key] === undefined)) reference[key] = {};
+                        reference = reference[key];
+                    }
+                    let lastKey = parts[parts.length - 1];
+                    reference[lastKey] = value;
+                }
+                if (typeof path === "function") {
+                    path.apply(null, Array.from(arguments));
+                }
+                throw new Error("Wrong path specification");
+            }
+        }
+    })
+
+    // events
+    metadataManager.define("event", 1, {
+        inherits: { "inheritable": 1 },
+        create: function ({ self }) {
+            const subsribers = [];
+            self.on = function (func) {
+                if (subsribers.indexOf(func) != -1) return;
+                subsribers.push(func);
+            }
+            self.off = function (func) {
+                let index = subsribers.indexOf(func);
+                if (index === -1) return;
+                subsribers.splice(index, 1)
+            }
+            self.emit = function (sender, arg) {
+                for (let subscriber of subsribers) subscriber.apply(sender, [sender, arg]);
+            }
+            Object.defineProperty("subscribers", {
+                get: function () {
+                    return subsribers.slice();
+                },
+                set: function (func) {
+                    self.subscribe(func);
+                }
+            })
+        }
+    })
+
+    metadataManager.define("events", 1, {
+        extensions: {
+            events: {
+                store: function (value) {
+                    if (!Array.isArray(value)) throw new Error("Events list must be an array");
+                    return value;
+                },
+                perInheritance: function (classMeta, shared) {
+                    if (!self.events) self.events = {};
+                    self.events[classMeta.name] = {};
+                    for (let eventName in classMeta.events) {
+                        let eventObject = new Basic(metadataManager.getClassMetadata("event", 1));
+                        self.events[classMeta.name][eventName] = eventObject;
+                    }
+                    Object.freeze(self.events[classMeta.name])
+                },
+                complete: function({self}) {
+                    Object.freeze(self.events);
+                }
+            },
+        }
+    })
 
     metadataManager.define("objectmanager", 1, {
         inherits: { "inheritable": 1 },
