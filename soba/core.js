@@ -21,7 +21,7 @@ function SobaInstance() {
         const metadataManager = this;
         const storage = {};
 
-        metadataManager.createClassId = function (name, version) {
+        metadataManager.classId = function (name, version) {
             if (!name) throw new Error("Please provide class name");
             if (!version) throw new Error("Please provide class version");
             return String(name) + ":" + String(version);
@@ -44,10 +44,10 @@ function SobaInstance() {
             Object.freeze(this)
         }
 
-        function ClassMetadata(name, version, attributes) {
-            this.classId = metadataManager.createClassId(name, version);
-            this.name = name;
-            this.version = version;
+        function ClassMetadata(attributes) {
+            this.classId = metadataManager.classId(attributes.name, attributes.version);
+            this.name = attributes.name;
+            this.version = attributes.version;
             if (!attributes) throw new Error("Please provide class attributes");
             if ((attributes.extends) && (!(attributes.extends instanceof Object))) throw new Error("ClassMetadata.extends attribute must be an object");
             if (attributes.extends) {
@@ -93,37 +93,28 @@ function SobaInstance() {
             storage[classMeta.classId] = classMeta;
         }
 
-        metadataManager.define = function (className, version, attributes) {
-            metadataManager.register(new ClassMetadata(className, version, attributes));
+        metadataManager.define = function (classProperties) {
+            metadataManager.register(new ClassMetadata(classProperties));
         }
 
-        metadataManager.getClassMetadataByClassId = function (classId) {
+        metadataManager.getClassMetadata = function (classId) {
             if (!storage[classId]) throw new Error("Class " + classId + " is not defined");
             return storage[classId];
         }
 
-        metadataManager.getClassMetadata = function () {
-            if (arguments[0] instanceof ClassMetadata) return arguments[0];
-            if (typeof arguments[0] === "string") {
-                if (arguments[1] !== undefined) return metadataManager.getClassMetadataByClassId(metadataManager.createClassId(arguments[0], arguments[1]));
-                else return metadataManager.getClassMetadataByClassId(arguments[0]);
-            }
-            throw new Error("Unable to indentify class by provided arguments: " + JSON.stringify(arguments));
-        }
-
-        metadataManager.getInheritanceChain = function () {
+        metadataManager.getInheritanceChain = function (classMetaOrId) {
             let found = [];
             function findInheritedMetadata(currentClassMeta) {
                 if (found.indexOf(currentClassMeta) !== -1) return;
                 if (currentClassMeta.inherits) {
                     for (const className in currentClassMeta.inherits) {
                         let classVersion = currentClassMeta.inherits[className]
-                        findInheritedMetadata(metadataManager.getClassMetadata(className, classVersion));
+                        findInheritedMetadata(metadataManager.getClassMetadata(metadataManager.classId(className, classVersion)));
                     }
                 }
                 found.push(currentClassMeta);
             }
-            let classMeta = metadataManager.getClassMetadata.apply(null, Array.from(arguments));
+            let classMeta = (classMetaOrId instanceof ClassMetadata) ? classMetaOrId :  metadataManager.getClassMetadata(classMetaOrId);
             findInheritedMetadata(classMeta);
             return found;
         }
@@ -200,7 +191,9 @@ function SobaInstance() {
         Object.freeze(self);
     }()
 
-    metadataManager.define("inheritable", 1, {
+    metadataManager.define({
+        name: "inheritable",
+        version: 1,
         extensions: {
             protected: {
                 sharedModifiers: function () {
@@ -244,13 +237,13 @@ function SobaInstance() {
                 },
             },
             completed: {
-                completed: function({self}) {
+                completed: function ({ self }) {
                     Object.freeze(self);
                 },
             }
         },
         create: function (shared) {
-            console.log("INheritable constructor");
+            console.log("Inheritable constructor");
         },
     });
 
@@ -264,7 +257,9 @@ function SobaInstance() {
         Object.freeze(this);
     }
 
-    metadataManager.define("paths", 1, {
+    metadataManager.define({
+        name: "paths",
+        version: 1,
         inherits: { "inheritable": 1 },
         create: function ({ self, protected }) {
             protected.paths.read = function (rootObject, path) {
@@ -301,7 +296,9 @@ function SobaInstance() {
     })
 
     // events
-    metadataManager.define("event", 1, {
+    metadataManager.define({
+        name: "event",
+        version: 1,
         inherits: { "inheritable": 1 },
         create: function ({ self }) {
             const subsribers = [];
@@ -318,18 +315,18 @@ function SobaInstance() {
             self.emit = function (sender, arg) {
                 for (let subscriber of subsribers) subscriber.apply(sender, [sender, arg]);
             }
-            self.mute = function() {
+            self.mute = function () {
                 self.muted = true;
             }
-            self.unmute = function() {
+            self.unmute = function () {
                 self.unmuted = false;
             }
-            self.runMuted = function(func) {
+            self.runMuted = function (func) {
                 self.muted = true;
                 func();
                 self.muted = false;
             }
-            self.once = function(func) {
+            self.once = function (func) {
                 self.on(function onceHandler() {
                     func();
                     self.off(onceHandler);
@@ -345,10 +342,10 @@ function SobaInstance() {
                     }
                 },
                 muted: {
-                    get: function() {
+                    get: function () {
                         return muted;
                     },
-                    set: function(val) {
+                    set: function (val) {
                         muted = !!val;
                     }
                 }
@@ -356,17 +353,19 @@ function SobaInstance() {
         }
     })
 
-    metadataManager.define("events", 1, {
+    metadataManager.define({
+        name: "events",
+        version: 1,
         extensions: {
             events: {
                 store: function (value) {
                     if (!Array.isArray(value)) throw new Error("Events list must be an array");
                     return value;
                 },
-                perInheritance: function (classMeta, {self}) {
+                perInheritance: function (classMeta, { self }) {
                     console.log("registering events for ", classMeta.name)
                     function registerEvent(eventName) {
-                        let eventInstance = new SobaObject(metadataManager.getClassMetadata("event", 1));
+                        let eventInstance = new SobaObject(metadataManager.getClassMetadata("event:1"));
                         self.events[classMeta.name][eventName] = eventInstance;
                     }
                     if (!self.events) self.events = {};
@@ -374,13 +373,13 @@ function SobaInstance() {
                     if (classMeta.events) for (let eventName of classMeta.events) registerEvent(eventName);
                     if (classMeta.troperties) {
                         let keys = Object.keys(classMeta.troperties);
-                        keys.forEach(function(key) {
-                            registerEvent(key+"Changed");
+                        keys.forEach(function (key) {
+                            registerEvent(key + "Changed");
                         })
                     }
                     Object.freeze(self.events[classMeta.name])
                 },
-                complete: function({self}) {
+                complete: function ({ self }) {
                     Object.freeze(self.events);
                 }
             },
@@ -389,16 +388,16 @@ function SobaInstance() {
                     if (!(value instanceof Object)) throw new Error("Troperties must be a key value");
                     return value;
                 },
-                perInheritance: function (classMeta, {self}) {
+                perInheritance: function (classMeta, { self }) {
                     if (!classMeta.troperties) return;
                     let keys = Object.keys(classMeta.troperties);
-                    keys.forEach(function(key) {
+                    keys.forEach(function (key) {
                         Object.defineProperty(self, key, {
-                            get: function() {
+                            get: function () {
                                 return value;
                             },
-                            set: function(newValue) {
-                                if (newValue===value) return;
+                            set: function (newValue) {
+                                if (newValue === value) return;
                                 value = newValue;
                                 self.events[classMeta.name][eventName].emit();
                             }
@@ -409,7 +408,9 @@ function SobaInstance() {
         }
     })
 
-    metadataManager.define("basic", 1, {
+    metadataManager.define({
+        name: "basic",
+        version: 1,
         inherits: {
             "events": 1,
             "paths": 1,
@@ -419,15 +420,17 @@ function SobaInstance() {
         tropperties: {
             parent: null,
         },
-        create: function({self, protected}) {
+        create: function ({ self, protected }) {
             self.events.basic.completed.emit();
         },
-        unref: function() {
+        unref: function () {
             self.events.basic.unref.emit();
         }
     })
 
-    metadataManager.define("objectmanager", 1, {
+    metadataManager.define({
+        name: "objectmanager",
+        version: 1,
         inherits: { "basic": 1 },
         singleton: true,
         create: function (shared) {
@@ -435,7 +438,7 @@ function SobaInstance() {
         },
     });
 
-    return new SobaObject(metadataManager.getClassMetadata("objectmanager", 1));
+    return new SobaObject(metadataManager.getClassMetadata("objectmanager:1"));
 
 }
 
