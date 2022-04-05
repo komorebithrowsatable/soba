@@ -383,9 +383,9 @@ function SobaInstance() {
                     Object.freeze(self.events);
                 }
             },
-            troperties: {
+            properties: {
                 store: function (value) {
-                    if (!(value instanceof Object)) throw new Error("Troperties must be a key value");
+                    if (!(value instanceof Object)) throw new Error("Properties must be a key value");
                     return value;
                 },
                 perInheritance: function (classMeta, { self }) {
@@ -417,7 +417,7 @@ function SobaInstance() {
             "inheritable": 1,
         },
         events: ["completed", "unref"],
-        tropperties: {
+        propperties: {
             parent: null,
         },
         create: function ({ self, protected }) {
