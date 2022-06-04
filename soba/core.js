@@ -161,6 +161,7 @@ function SobaInstance(requestedClassId) {
     const inheritableStaticDataStorage = new function () {
         const self = this;
         const singletons = {};
+        const classStaticData = {};
 
         self.registerSingleton = function (singleton) {
             if (singletons[singleton.metadata.classId]) throw new Error("An attempt to register second singleton of class " + singleton.metadata.classId);
@@ -169,44 +170,34 @@ function SobaInstance(requestedClassId) {
         self.getSingleton = function (classId) {
             return singletons[classId];
         }
+        self.getStaticData = function (classId) {
+            return (self.staticDataExists(classId)) ? classStaticData[classId] : null;
+        }
+        self.staticDataExists = function (classId) {
+            return (classStaticData[classId] !== undefined)
+        }
+        self.setStaticData = function (classId, data) {
+            classStaticData[classId] = data;
+        }
         Object.freeze(self);
     }()
-
-    function Property({ value, get, set, trigger, validator, readonly }) {
-        const self = this;
-        if (value === undefined) value = null;
-        if (get === undefined) get = function() {
-            return value;
-        }
-        if (set === undefined) set = function(newValue) {
-            return newValue;
-        }
-        if ((trigger !== undefined)&&(typeof trigger !== "function")) throw new Error("Property change trigger must be a function");
-        if ((validator !== undefined)&&(typeof validator !== "function")) throw new Error("Property validator must be a function");
-        this.get = function() {
-            return get(value);
-        }
-        this.set = function(newValue) {
-            if (newValue===value) return;
-            if (readonly) throw new Error("An attempt to write readonly property");
-            if ((validator)&&(!validator(newValue))) return;
-            set(newValue);
-            if (trigger) trigger();
-        }
-        this.alias = function (object, name) {
-            Object.defineProperty(object, name, {
-                get: self.get,
-                set: self.set,
-                configurable: false,
-            })
-        }
-        Object.freeze(this);
-    }
 
     metadataManager.define({
         name: "interface",
         version: 1,
         extensions: {
+            static: {
+                store: function (value) {
+                    if ((typeof value !== "function") && (value !== null) && (value !== undefined)) throw new Error("Class static space must be a function or null/undefined");
+                    return value;
+                },
+                perInheritance: function (classMeta, shared) {
+                    if ((typeof classMeta.static === "function") && (!inheritableStaticDataStorage.staticDataExists(classMeta.name))) {
+                        let static = classMeta.static.apply(shared.self, shared);
+                        inheritableStaticDataStorage.setStaticData(classMeta.classId, static);
+                    }
+                }
+            },
             private: {
                 store: function (value) {
                     if ((typeof value !== "function") && (value !== null) && (value !== undefined)) throw new Error("Class constructor must be a function or null/undefined");
@@ -214,7 +205,8 @@ function SobaInstance(requestedClassId) {
                 },
                 perInheritance: function (classMeta, shared) {
                     if (!classMeta.private) return;
-                    return { [classMeta.name]: classMeta.private.apply(shared.self, [shared]) };
+                    let classStaticSpace = inheritableStaticDataStorage.getStaticData(classMeta.classId);
+                    return { [classMeta.name]: classMeta.private.apply(shared.self, [shared, classStaticSpace]) };
                 },
             },
             public: {
@@ -224,7 +216,8 @@ function SobaInstance(requestedClassId) {
                 },
                 perInheritance: function (classMeta, shared) {
                     if (!classMeta.public) return;
-                    let public = classMeta.public.apply(shared.self, [shared]);
+                    let classStaticSpace = inheritableStaticDataStorage.getStaticData(classMeta.classId);
+                    let public = classMeta.public.apply(shared.self, [shared, classStaticSpace]);
                     for (let key in public) {
                         let property = public[key];
                         if (shared.interface.isProperty(property)) property.alias(shared.self, key);
@@ -266,35 +259,88 @@ function SobaInstance(requestedClassId) {
                 },
             },
         },
-        private: function () {
+        static: function () {
+            function Property({ value, get, set, trigger, validator, readonly }) {
+                const self = this;
+                if (value === undefined) value = null;
+                if (get === undefined) get = function () {
+                    return value;
+                }
+                if (set === undefined) set = function (newValue) {
+                    return newValue;
+                }
+                if ((trigger !== undefined) && (typeof trigger !== "function")) throw new Error("Property change trigger must be a function");
+                if ((validator !== undefined) && (typeof validator !== "function")) throw new Error("Property validator must be a function");
+                this.get = function () {
+                    return get(value);
+                }
+                this.set = function (newValue) {
+                    if (newValue === value) return;
+                    if (readonly) throw new Error("An attempt to write readonly property");
+                    if ((validator) && (!validator(newValue))) return;
+                    set(newValue);
+                    if (trigger) trigger();
+                }
+                this.alias = function (object, name) {
+                    Object.defineProperty(object, name, {
+                        get: self.get,
+                        set: self.set,
+                        configurable: false,
+                    })
+                }
+                Object.freeze(this);
+            }
+
+            return { Property }
+        },
+        private: function ({ }, static) {
             function property(arg) {
-                return new Property(arg);
+                return new static.Property(arg);
             }
             function isProperty(val) {
-                return (val instanceof Property)
+                return (val instanceof static.Property)
             }
-            return { property, isProperty }
+            function createEnum() {
+                return new Enum(arguments)
+            }
+            return { property, isProperty, enum: createEnum }
         },
     });
 
-    // paths
-    function Path(read, write) {
-        if ((typeof read === "string") && (write === undefined)) write = read;
-        if ((typeof read !== "string") && (typeof read !== "function")) throw new Error("Path.read must be a string or a function");
-        this.read = read;
-        this.readonly = (write === undefined);
-        this.write = (this.readonly) ? null : write;
-        Object.freeze(this);
-    }
+    // util
 
     metadataManager.define({
-        name: "paths",
+        name: "util",
         version: 1,
         inherits: { "interface": 1 },
-        private: function ({ self }) {
-            return {
+        static: function() {
+            function Path(read, write) {
+                if ((typeof read === "string") && (write === undefined)) write = read;
+                if ((typeof read !== "string") && (typeof read !== "function")) throw new Error("Path.read must be a string or a function");
+                this.read = read;
+                this.readonly = (write === undefined);
+                this.write = (this.readonly) ? null : write;
+                Object.freeze(this);
+            }
+            function EnumVariant(parent, name) {
+                this.parent = parent;
+                this.name = name;
+                Object.freeze(this);
+            }
+        
+            function Enum() {
+                for (let i = 0; i < arguments.length; i++) {
+                    if (typeof arguments[i] !== "string") throw new Error("Enum value must be a string");
+                    this[arguments[i]] = new EnumVariant(this, arguments[i]);
+                }
+                Object.freeze(this);
+            }
+            return {Path, Enum, EnumVariant}
+        },
+        private: function ({ self }, static) {
+            const paths =  Object.freeze({
                 read: function (rootObject, path) {
-                    if (path instanceof Path) path = path.read;
+                    if (path instanceof static.Path) path = path.read;
                     if (typeof path === "string") {
                         if (path.startsWith("@value:")) return path.substring(7);
                         if (path == "@root") return rootObject;
@@ -306,7 +352,7 @@ function SobaInstance(requestedClassId) {
                     throw new Error("Wrong path specification");
                 },
                 write: function (rootObject, path, value, create) {
-                    if (path instanceof Path) path = path.write;
+                    if (path instanceof static.Path) path = path.write;
                     if (typeof path === "string") {
                         let parts = path.split(".");
                         let reference = rootObject;
@@ -323,9 +369,12 @@ function SobaInstance(requestedClassId) {
                     }
                     throw new Error("Wrong path specification");
                 },
-            }
+            });
+            
+            return {paths}
         },
     })
+    
 
     // events
     metadataManager.define({
@@ -381,13 +430,13 @@ function SobaInstance(requestedClassId) {
                     self.off(onceHandler);
                 })
             }
-            return { muted, subscribers, on, off, emit, mute, unmute, runMuted, once };
+            return { muted, subscribers, on, off, emit, mute, unmute, runMuted, once, trigger: emit };
         }
     })
 
     metadataManager.define({
         name: "events",
-        inherits: {"interface": 1},
+        inherits: { "interface": 1 },
         version: 1,
         extensions: {
             events: {
@@ -413,21 +462,93 @@ function SobaInstance(requestedClassId) {
                 }
             },
         },
-        private: function({self}) {
+        private: function ({ self }) {
             const events = {};
             function registerClassEvents(classMeta) {
                 if (!classMeta.events) return;
                 const classEvents = {};
                 for (eventName of classMeta.events) classEvents[eventName] = new SobaObject(metadataManager.getClassMetadata("event:1"));
                 Object.freeze(classEvents);
-                events[classMeta.name] = classEvents; 
+                events[classMeta.name] = classEvents;
             }
             for (classMeta of self.metadata.representedClasses) registerClassEvents(classMeta);
             Object.freeze(events);
             return events;
         },
-        public: function({self, events}) {
-            return {events};
+        public: function ({ self, events }) {
+            return { events };
+        }
+    })
+
+    metadataManager.define({
+        name: "health",
+        version: 1,
+        inherits: { "events": 1 },
+        events: ["debug", "error"],
+        static: function() {
+            function LogMessage() {
+
+            }
+            return {LogMessage}
+        },
+        private: function ({ self, events, util }, static) {
+
+            const logTypes = util.enums.createEnum("info", "warning", "critical", "fatal");
+
+            function info(message, dump, result) {
+                const logMessage = new static.LogMessage({
+                    type: logTypes.info,
+                    message: message,
+                    dump: dump,
+                });
+                events.health.debug.emit(self, {logMessage, result});
+                return result;
+            }
+            
+            function warning(message, dump, result) {
+                const logMessage = new static.LogMessage({
+                    type: logTypes.warning,
+                    message: message,
+                    dump: dump,
+                });
+                events.health.debug.emit(self, {logMessage, result});
+                return result;
+            }
+
+            function critical(err, dump) {
+                const logMessage = new static.LogMessage({
+                    type: logTypes.critical,
+                    message: err.message,
+                    dump: dump,
+                    error: err
+                });
+                events.health.error.emit(self, {logMessage});
+                return err;
+            }
+
+            function fatal(err, dump) {
+                const logMessage = new static.LogMessage({
+                    type: logTypes.fatal,
+                    message: message,
+                    dump: dump,
+                    error: err
+                });
+                events.health.error.emit(self, {logMessage});
+                return err;
+            }
+
+            function safeExec(func) {
+                try {
+                    return func();
+                }
+                catch(err) {
+                    critical(err);
+                    return null;
+                }
+            }
+
+
+            return {logTypes, info, warning, critical, fatal, try: safeExec}
         }
     })
 
@@ -436,14 +557,19 @@ function SobaInstance(requestedClassId) {
         version: 1,
         inherits: {
             "events": 1,
-            "paths": 1,
+            "util": 1,
             "interface": 1,
         },
         events: ["completed", "free"],
-        properties: {
-            parent: null,
-        },
-        private: function ({ self, events }) {
+        private: function ({ self, events, interface, health }) {
+
+            const parent = interface.property({
+                value: null,
+                validator: function (newValue) {
+
+                }
+            })
+
             events.basic.completed.emit();
         },
         free: function () {
