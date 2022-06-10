@@ -313,7 +313,7 @@ function SobaInstance(requestedClassId) {
         name: "util",
         version: 1,
         inherits: { "interface": 1 },
-        static: function() {
+        static: function () {
             function Path(read, write) {
                 if ((typeof read === "string") && (write === undefined)) write = read;
                 if ((typeof read !== "string") && (typeof read !== "function")) throw new Error("Path.read must be a string or a function");
@@ -327,7 +327,7 @@ function SobaInstance(requestedClassId) {
                 this.name = name;
                 Object.freeze(this);
             }
-        
+
             function Enum() {
                 for (let i = 0; i < arguments.length; i++) {
                     if (typeof arguments[i] !== "string") throw new Error("Enum value must be a string");
@@ -335,10 +335,10 @@ function SobaInstance(requestedClassId) {
                 }
                 Object.freeze(this);
             }
-            return {Path, Enum, EnumVariant}
+            return { Path, Enum, EnumVariant }
         },
         private: function ({ self }, static) {
-            const paths =  Object.freeze({
+            const paths = Object.freeze({
                 read: function (rootObject, path) {
                     if (path instanceof static.Path) path = path.read;
                     if (typeof path === "string") {
@@ -370,11 +370,23 @@ function SobaInstance(requestedClassId) {
                     throw new Error("Wrong path specification");
                 },
             });
-            
-            return {paths}
+
+            const enums = Object.freeze({
+                createEnum: function () {
+                    return new static.Enum(Array.from(arguments));
+                },
+                isEnumVariant: function (value) {
+                    return value instanceof static.EnumVariant;
+                },
+                isVariantOf: function (value, enumType) {
+                    return ((enums.isEnumVariant(value)) && (value.parent == enumType));
+                }
+            })
+
+            return { paths, enums }
         },
     })
-    
+
 
     // events
     metadataManager.define({
@@ -443,22 +455,6 @@ function SobaInstance(requestedClassId) {
                 store: function (value) {
                     if (!Array.isArray(value)) throw new Error("Events list must be an array");
                     return value;
-                },
-                perInheritance: function (classMeta, { self }) {
-                    function registerEvent(eventName) {
-                        let eventInstance = new SobaObject(metadataManager.getClassMetadata("event:1"));
-                        self.events[classMeta.name][eventName] = eventInstance;
-                    }
-                    if (!self.events) self.events = {};
-                    self.events[classMeta.name] = {};
-                    if (classMeta.events) for (let eventName of classMeta.events) registerEvent(eventName);
-                    if (classMeta.troperties) {
-                        let keys = Object.keys(classMeta.troperties);
-                        keys.forEach(function (key) {
-                            registerEvent(key + "Changed");
-                        })
-                    }
-                    Object.freeze(self.events[classMeta.name])
                 }
             },
         },
@@ -481,19 +477,25 @@ function SobaInstance(requestedClassId) {
     })
 
     metadataManager.define({
-        name: "health",
+        name: "log",
         version: 1,
         inherits: { "events": 1 },
         events: ["debug", "error"],
-        static: function() {
-            function LogMessage() {
-
-            }
-            return {LogMessage}
-        },
-        private: function ({ self, events, util }, static) {
+        static: function ({ util }) {
 
             const logTypes = util.enums.createEnum("info", "warning", "critical", "fatal");
+
+            function LogMessage({ type, message, dump, error }) {
+                if (!util.enums.isVariantOf(type, static.logTypes)) throw new LogMessage({
+                    type: logTypes.critical,
+                    message: "Wrong log type specified in log message",
+                    dump: { type, message, dump }
+                });
+            }
+
+            return { logTypes, LogMessage }
+        },
+        private: function ({ self, events, util }, static) {
 
             function info(message, dump, result) {
                 const logMessage = new static.LogMessage({
@@ -501,17 +503,17 @@ function SobaInstance(requestedClassId) {
                     message: message,
                     dump: dump,
                 });
-                events.health.debug.emit(self, {logMessage, result});
+                events.health.debug.emit(self, { logMessage, result });
                 return result;
             }
-            
+
             function warning(message, dump, result) {
                 const logMessage = new static.LogMessage({
                     type: logTypes.warning,
                     message: message,
                     dump: dump,
                 });
-                events.health.debug.emit(self, {logMessage, result});
+                events.health.debug.emit(self, { logMessage, result });
                 return result;
             }
 
@@ -522,7 +524,7 @@ function SobaInstance(requestedClassId) {
                     dump: dump,
                     error: err
                 });
-                events.health.error.emit(self, {logMessage});
+                events.health.error.emit(self, { logMessage });
                 return err;
             }
 
@@ -533,22 +535,164 @@ function SobaInstance(requestedClassId) {
                     dump: dump,
                     error: err
                 });
-                events.health.error.emit(self, {logMessage});
+                events.health.error.emit(self, { logMessage });
                 return err;
             }
 
-            function safeExec(func) {
+            function safeExec(func, res, dump) {
                 try {
                     return func();
                 }
-                catch(err) {
-                    critical(err);
-                    return null;
+                catch (err) {
+                    critical(err, dump);
+                    return (res === undefined) ? null : res;
                 }
             }
 
+            return { logTypes: statuc.logTypes, info, warning, critical, fatal, try: safeExec }
+        }
+    })
 
-            return {logTypes, info, warning, critical, fatal, try: safeExec}
+    metadataManager.define({
+        name: "types",
+        version: 1,
+        inherits: {
+            "events": 1,
+            "util": 1,
+            "interface": 1
+        },
+        extensions: {
+            types: {
+                store: function (value) {
+                    if (!Array.isArray(value)) throw new Error("Types must be an array");
+                    return value;
+                },
+            }
+        },
+        static: function ({ log }) {
+            function defaultValidator(value) {
+                if (value == null) return true;
+                return value instanceof this.create;
+            }
+
+            function TypeMetadata({ create, name, isPrimitive, validate, convert }) {
+                if (typeof create != "function") throw log.critical("Type must have a constructor", arguments);
+                this.create = create;
+                this.name = (name) ? name : create.name;
+                if (!this.name) throw log.critical("Type must have a name", arguments);
+                this.isPrimitive = !!isPrimitive;
+                if ((validate !== undefined) && (typeof validate !== null) && (typeof validate !== "function")) throw log.critical("Type validator must be a function", arguments);
+                this.validate = ((validate !== undefined) && (typeof validate !== null)) ? validate : defaultValidator;
+                Object.freeze(this);
+            }
+
+            const basicTypes = {};
+
+            function createTypeMetadata(typeDescription) {
+                if (typeof typeDescription==="function") return new static.TypeMetadata({create: typeDescription});
+                return new static.TypeMetadata(typeDescription)
+            }
+
+            function registerBasicType(typeDescription) {
+                const type = createTypeMetadata(typeDescription);
+                if (basicTypes[type.name] !== undefined) throw log.critical("This type is already registered", arguments);
+                basicTypes[type.name] = type;
+            }
+
+            function registerBasicTypes(types) {
+                for (typeDescription of types) registerBasicType(typeDescription)
+            }
+
+            const utilStatic = inheritableStaticDataStorage.getStaticData("util:1");    //TODO: find a better solution probably?
+            const logStatic = inheritableStaticDataStorage.getStaticData("log:1");
+            registerBasicTypes([utilStatic.Path, utilStatic.Enum, utilStatic.EnumVariant, logStatic.LogMessage]);
+            registerBasicTypes([
+                {
+                    create: Number,
+                    isPrimitive: true,
+                    validate: function (value) {
+                        return (typeof value === "number");
+                    },
+                },
+                {
+                    create: Number,
+                    name: "Integer",
+                    isPrimitive: true,
+                    validate: function (value) {
+                        return !isNaN(parseInt(value))
+                    },
+                },
+                {
+                    create: String,
+                    isPrimitive: true,
+                    validate: function (value) {
+                        return (typeof value === "string");
+                    },
+                },
+                {
+                    create: Boolean,
+                    isPrimitive: true,
+                    validate: function (value) {
+                        return (typeof value === "boolean");
+                    },
+                },
+                Error,
+                Object,
+                Date,
+                Function,
+                Array,
+                {
+                    create: function Any() {
+                        throw new Error("Any is a virtual type that can't be created")
+                    },
+                    validate: function() {
+                        return true
+                    }
+                },
+                {
+                    create: function EmptyValue() {
+                        throw new Error("EmptyValue is a virtual type that can't be created")
+                    },
+                    validate: function(value) {
+                        return ((value===undefined)||(value===null)||(value===""))
+                    }
+                }
+            ])
+
+            return { TypeMetadata, basicTypes, createTypeMetadata }
+        },
+        private: function ({ self, log }, static) {
+            
+            const localTypes = {}
+            
+            const types = interface.property({
+                get: function (value) {
+                    return Object.assign({}, static.basicTypes, localTypes)
+                },
+                readonly: true
+            });
+
+            function registerType(typeDescription) {
+                const type = static.createTypeMetadata(typeDescription);
+                if (localTypes[type.name] !== undefined) throw log.critical("This type is already registered", arguments);
+                localTypes[type.name] = type;
+            }
+
+            function getType(name) {
+                if (static.basicTypes[name] !== undefined) return static.basicTypes[name];
+                if (localTypes[name] !== undefined) return localTypes[name];
+                throw log.critical("There's no type registered with the name provided", arguments);
+            }
+
+            function registerTypes(types) {
+                for (typeDescription of types) registerType(typeDescription)
+            }
+
+            for (classMeta of self.metadata.representedClasses) if (classMeta.types!==undefined) registerTypes(classMeta.types);
+
+            Object.freeze(localTypes);
+
+            return {types, getType}
         }
     })
 
@@ -561,12 +705,12 @@ function SobaInstance(requestedClassId) {
             "interface": 1,
         },
         events: ["completed", "free"],
-        private: function ({ self, events, interface, health }) {
+        private: function ({ self, events, interface, health, types }) {
 
             const parent = interface.property({
                 value: null,
                 validator: function (newValue) {
-
+                    types.mustBe(newValue, "@basic:1|null");
                 }
             })
 
