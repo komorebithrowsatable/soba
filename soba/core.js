@@ -193,7 +193,8 @@ function SobaInstance(requestedClassId) {
                 },
                 perInheritance: function (classMeta, shared) {
                     if ((typeof classMeta.static === "function") && (!inheritableStaticDataStorage.staticDataExists(classMeta.name))) {
-                        let static = classMeta.static.apply(shared.self, shared);
+                        //console.log("Running static for "+classMeta.name)
+                        let static = classMeta.static.apply(shared.self, [shared]);
                         inheritableStaticDataStorage.setStaticData(classMeta.classId, static);
                     }
                 }
@@ -279,7 +280,7 @@ function SobaInstance(requestedClassId) {
                     if (readonly) throw new Error("An attempt to write readonly property");
                     if ((validator) && (!validator(newValue))) return;
                     set(newValue);
-                    if (trigger) trigger();
+                    if (trigger) trigger(newValue, value);
                 }
                 this.alias = function (object, name) {
                     Object.defineProperty(object, name, {
@@ -306,86 +307,6 @@ function SobaInstance(requestedClassId) {
             return { property, isProperty, enum: createEnum }
         },
     });
-
-    // util
-
-    metadataManager.define({
-        name: "util",
-        version: 1,
-        inherits: { "interface": 1 },
-        static: function () {
-            function Path(read, write) {
-                if ((typeof read === "string") && (write === undefined)) write = read;
-                if ((typeof read !== "string") && (typeof read !== "function")) throw new Error("Path.read must be a string or a function");
-                this.read = read;
-                this.readonly = (write === undefined);
-                this.write = (this.readonly) ? null : write;
-                Object.freeze(this);
-            }
-            function EnumVariant(parent, name) {
-                this.parent = parent;
-                this.name = name;
-                Object.freeze(this);
-            }
-
-            function Enum() {
-                for (let i = 0; i < arguments.length; i++) {
-                    if (typeof arguments[i] !== "string") throw new Error("Enum value must be a string");
-                    this[arguments[i]] = new EnumVariant(this, arguments[i]);
-                }
-                Object.freeze(this);
-            }
-            return { Path, Enum, EnumVariant }
-        },
-        private: function ({ self }, static) {
-            const paths = Object.freeze({
-                read: function (rootObject, path) {
-                    if (path instanceof static.Path) path = path.read;
-                    if (typeof path === "string") {
-                        if (path.startsWith("@value:")) return path.substring(7);
-                        if (path == "@root") return rootObject;
-                        return path.split(".").reduce(function (ref, element) { return ref[element] }, rootObject);
-                    }
-                    if (typeof path === "function") {
-                        return path.apply(rootObject, Array.from(arguments));
-                    }
-                    throw new Error("Wrong path specification");
-                },
-                write: function (rootObject, path, value, create) {
-                    if (path instanceof static.Path) path = path.write;
-                    if (typeof path === "string") {
-                        let parts = path.split(".");
-                        let reference = rootObject;
-                        for (let i = 0; i < keys.length - 1; i++) {
-                            let key = parts[i];
-                            if ((create) && (reference[key] === undefined)) reference[key] = {};
-                            reference = reference[key];
-                        }
-                        let lastKey = parts[parts.length - 1];
-                        reference[lastKey] = value;
-                    }
-                    if (typeof path === "function") {
-                        path.apply(null, Array.from(arguments));
-                    }
-                    throw new Error("Wrong path specification");
-                },
-            });
-
-            const enums = Object.freeze({
-                createEnum: function () {
-                    return new static.Enum(Array.from(arguments));
-                },
-                isEnumVariant: function (value) {
-                    return value instanceof static.EnumVariant;
-                },
-                isVariantOf: function (value, enumType) {
-                    return ((enums.isEnumVariant(value)) && (value.parent == enumType));
-                }
-            })
-
-            return { paths, enums }
-        },
-    })
 
 
     // events
@@ -476,17 +397,62 @@ function SobaInstance(requestedClassId) {
         }
     })
 
+    // enums
+    metadataManager.define({
+        name: "enums",
+        version: 1,
+        inherits: {
+            "interface": 1
+        },
+        static: function() {
+            function EnumVariant(parent, name) {
+                this.parent = parent;
+                this.name = name;
+                Object.freeze(this);
+            }
+            function Enum(list) {
+                for (let i = 0; i < list.length; i++) {
+                    if (typeof list[i] !== "string") throw new Error("Enum value must be a string");
+                    this[list[i]] = new EnumVariant(this, list[i]);
+                }
+                Object.freeze(this);
+            }
+            return {Enum, EnumVariant}
+        },
+        private: function({}, static) {
+            
+            console.log("hj")
+
+            function createEnum() {
+                return new static.Enum(Array.from(arguments));
+            }
+
+            function isEnumVariant(value) {
+                return value instanceof static.EnumVariant;
+            }
+
+            function isVariantOf(value, enumType) {
+                return ((enums.isEnumVariant(value)) && (value.parent == enumType));
+            }
+
+            return {createEnum, isEnumVariant, isVariantOf}
+        }
+    })
+
     metadataManager.define({
         name: "log",
         version: 1,
-        inherits: { "events": 1 },
+        inherits: {
+            "events": 1,
+            "enums": 1
+        },
         events: ["debug", "error"],
-        static: function ({ util }) {
+        static: function ({enums}) {
 
-            const logTypes = util.enums.createEnum("info", "warning", "critical", "fatal");
+            const logTypes = enums.createEnum("info", "warning", "critical", "fatal");
 
             function LogMessage({ type, message, dump, error }) {
-                if (!util.enums.isVariantOf(type, static.logTypes)) throw new LogMessage({
+                if (!enums.isVariantOf(type, static.logTypes)) throw new LogMessage({
                     type: logTypes.critical,
                     message: "Wrong log type specified in log message",
                     dump: { type, message, dump }
@@ -549,17 +515,77 @@ function SobaInstance(requestedClassId) {
                 }
             }
 
-            return { logTypes: statuc.logTypes, info, warning, critical, fatal, try: safeExec }
+            return { logTypes: static.logTypes, info, warning, critical, fatal, try: safeExec }
         }
+    })
+
+    // util
+    metadataManager.define({
+        name: "util",
+        version: 1,
+        inherits: { 
+            "log": 1
+        },
+        static: function () {
+            function Path(read, write) {
+                if ((typeof read === "string") && (write === undefined)) write = read;
+                if ((typeof read !== "string") && (typeof read !== "function")) throw new Error("Path.read must be a string or a function");
+                this.read = read;
+                this.readonly = (write === undefined);
+                this.write = (this.readonly) ? null : write;
+                Object.freeze(this);
+            }
+            return { Path }
+        },
+        private: function ({ self, log }, static) {
+            const paths = Object.freeze({
+                read: function (rootObject, path) {
+                    if (path instanceof static.Path) path = path.read;
+                    if (typeof path === "string") {
+                        if (path.startsWith("@value:")) return path.substring(7);
+                        if (path == "@root") return rootObject;
+                        return path.split(".").reduce(function (ref, element) { return ref[element] }, rootObject);
+                    }
+                    if (typeof path === "function") {
+                        return path.apply(rootObject, Array.from(arguments));
+                    }
+                    throw new Error("Wrong path specification");
+                },
+                write: function (rootObject, path, value, create) {
+                    if (path instanceof static.Path) path = path.write;
+                    if (typeof path === "string") {
+                        let parts = path.split(".");
+                        let reference = rootObject;
+                        for (let i = 0; i < keys.length - 1; i++) {
+                            let key = parts[i];
+                            if ((create) && (reference[key] === undefined)) reference[key] = {};
+                            reference = reference[key];
+                        }
+                        let lastKey = parts[parts.length - 1];
+                        reference[lastKey] = value;
+                    }
+                    if (typeof path === "function") {
+                        path.apply(null, Array.from(arguments));
+                    }
+                    throw new Error("Wrong path specification");
+                },
+            });
+
+            const functions = Object.freeze({
+                notImplemented: function(name) {
+                    return function() { throw log.critical("Function "+ name +" is not implemented", {name})}
+                },
+            })
+
+            return { paths, functions }
+        },
     })
 
     metadataManager.define({
         name: "types",
         version: 1,
         inherits: {
-            "events": 1,
-            "util": 1,
-            "interface": 1
+            "log": 1,
         },
         extensions: {
             types: {
@@ -586,10 +612,15 @@ function SobaInstance(requestedClassId) {
                 Object.freeze(this);
             }
 
+            function TypeExpression() {
+                this.types = [];
+                this.flags = {}
+            }
+
             const basicTypes = {};
 
             function createTypeMetadata(typeDescription) {
-                if (typeof typeDescription==="function") return new static.TypeMetadata({create: typeDescription});
+                if (typeof typeDescription === "function") return new static.TypeMetadata({ create: typeDescription });
                 return new static.TypeMetadata(typeDescription)
             }
 
@@ -645,7 +676,7 @@ function SobaInstance(requestedClassId) {
                     create: function Any() {
                         throw new Error("Any is a virtual type that can't be created")
                     },
-                    validate: function() {
+                    validate: function () {
                         return true
                     }
                 },
@@ -653,19 +684,21 @@ function SobaInstance(requestedClassId) {
                     create: function EmptyValue() {
                         throw new Error("EmptyValue is a virtual type that can't be created")
                     },
-                    validate: function(value) {
-                        return ((value===undefined)||(value===null)||(value===""))
+                    validate: function (value) {
+                        return ((value === undefined) || (value === null) || (value === ""))
                     }
-                }
+                },
+                TypeMetadata,
+                SobaObject
             ])
 
-            return { TypeMetadata, basicTypes, createTypeMetadata }
+            return { TypeMetadata, basicTypes, createTypeMetadata, TypeExpression }
         },
-        private: function ({ self, log }, static) {
-            
+        private: function ({ self, log, }, static) {
+
             const localTypes = {}
-            
-            const types = interface.property({
+
+            const list = interface.property({
                 get: function (value) {
                     return Object.assign({}, static.basicTypes, localTypes)
                 },
@@ -688,11 +721,151 @@ function SobaInstance(requestedClassId) {
                 for (typeDescription of types) registerType(typeDescription)
             }
 
-            for (classMeta of self.metadata.representedClasses) if (classMeta.types!==undefined) registerTypes(classMeta.types);
-
+            for (classMeta of self.metadata.representedClasses) if (classMeta.types !== undefined) registerTypes(classMeta.types);
             Object.freeze(localTypes);
 
-            return {types, getType}
+            // Types validator
+
+            function validateStruct(abstractValue, expression) {
+
+                function parseExpression(expression) {
+                    if (!static.basicTypes.String.validate(expression)) throw log.critical("Type expression must be a string", { expression })
+                    const supportedFlags = {
+                        "+": "findMore",
+                        "!": "mandatory",
+                        "?": "convert",
+                        "<": "forceConvert",
+                    }
+                    const flagSymbols = Object.keys(supportedFlags);
+                    const res = new static.TypeExpression();
+                    while ((expression.length > 0) && (flagSymbols.indexOf(expression[expression.length - 1]) != -1)) {
+                        let flag = expression[expression.length - 1];
+                        let flagName = supportedFlags[flag];
+                        if (res.flags[flagName]) throw log.critical("Invalid expression: double flag detected", { expression });
+                        res.flags[flagName] = true;
+                        expression = expression.substring(0, expression.length - 1);
+                    }
+                    var types = expression.split("|");
+                    for (let type of types) {
+                        if ((type[0]) === "@") {
+                            type = type.substring(1, type.length);
+                            if (type.indexOf(":") === -1) throw log.critical("Class expression must contain version(s)", { expression });
+                            let splitted = type.split(":");
+                            if (splitted.length != 2) throw log.critical("Class expression can contain only name and version(s)", { expression });
+                            let className = splitted[0];
+                            let versions = splitted[1].split(",");
+                            for (const version in versions) {
+                                res.types.push(metadataManager.getClassMetadata(className + ":" + version));
+                            }
+                        }
+                        else {
+                            let typeMeta = getType(type);
+                            res.types.push(typeMeta);
+                        }
+                    }
+                    return res;
+                }
+    
+                function validateValue(value, typeExpression) {
+                    if ((typeExpression.flags.mandatory) && (static.basicTypes.EmptyValue.validate(value))) throw log.critical("This value is mandatory", { value, expression });
+                    let matchesTo = null;
+                    for (let type of exp.types) {
+                        if (static.basicTypes.TypeMetadata.validate(type)) {
+                            if (type.validate(value)) {
+                                matchesTo = type;
+                                break;
+                            }
+                        }
+                        else if ((static.basicTypes.SobaObject.validate(value)) && (static.basicTypes.ClassMetadata.validate(type))) {
+                            if (metadataManager.inherits(value.meta.className, value.meta.version, type.name, type.version)) {
+                                matchesTo = type;
+                                break;
+                            }
+                        }
+                    }
+                    if (typeExpression.flags.forceConvert) {
+                        if (matchesTo == exp.flags.types[0]) return value;
+                        else return convert(value, typeExpression.flags.types[0]);
+                    }
+                    if (matchesTo == null) {
+                        if (!typeExpression.flags.convert) throw log.critical("Value doesn't match specified types or classes", {value, typeExpression});
+                        else return convert(value, typeExpression.flags.types[0])
+                    }
+                    return value;
+                }
+    
+                function validateArray(array, typeExpressions) {
+                    if (!static.basicTypes.Array.validate(array)) throw log.critical("When checking array both value and expression must be an array", {value, typeExpressions});
+                    if (!static.basicTypes.Array.validate(typeExpressions)) throw log.critical("When checking array both value and expression must be an array", {value, typeExpressions});
+    
+                    let dataPosition = 0;
+                    let expPosition = 0;
+                    while (expPosition < typeExpressions.length) {
+                        let exp = parseExpression(typeExpressions[expPosition]);
+                        if (dataPosition >= array.length) {
+                            if (exp.flags.mandatory) throw log.critical("Mandatory array element is missing", {value, typeExpressions});
+                        }
+                        else array[dataPosition] = validateValue(array[dataPosition], exp);
+                        dataPosition++;
+                        if (exp.flags.findMore) {
+                            while (dataPosition < array.length) {
+                                try {
+                                    array[dataPosition] = validateValue(array[dataPosition], exp);
+                                    dataPosition++;
+                                }
+                                catch (err) {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+    
+                function validateObject(object, typeExpressions) {
+                    if (!static.basicTypes.Object.validate(object)) throw log.critical("When checking array both value and expression must be an object", {value, typeExpressions});
+                    if (!static.basicTypes.Object.validate(typeExpressions)) throw log.critical("When checking array both value and expression must be an object", {value, typeExpressions});
+    
+                    let keys = Object.keys(typeExpressions);
+                    keys.sort(function (key) {
+                        return ((key.startsWith("/")) && (key.endsWith("/"))) ? 1 : -1;
+                    });
+                    let validatedProperties = [];
+                    keys.forEach(function (key) {
+                        let exp = parseExpression(typeExpressions[key]);
+                        let isRegExpKey = ((key.startsWith("/")) && (key.endsWith("/")));
+                        if (isRegExpKey) {
+                            let regExp = new RegExp(key.substring(1, key.length - 1));
+                            Object.keys(object).forEach(function (propertyName) {
+                                if (!regExp.test(propertyName)) return;
+                                if (validatedProperties.indexOf(propertyName) != -1) return;
+                                if (object[propertyName] === undefined) {
+                                    if (exp.mandatory) throw log.critical("Mandatory property is missing", {value, typeExpressions});
+                                }
+                                else object[propertyName] = validateValue(object[propertyName], exp);
+                            });
+                        }
+                        else {
+                            if (object[key] === undefined) {
+                                if (exp.mandatory) throw log.critical("Mandatory property is missing", {value, typeExpressions});
+                            }
+                            else object[key] = validateValue(object[key], exp);
+                        }
+                    })
+                }
+    
+                function validateAbstract(abstractValue, expression) {
+                    if (static.basicTypes.Array.validate(expression)) return validateArray(value, expression);
+                    else if (self.types.Object.validate(expression)) return validateObject(value, expression);
+                    else {
+                        if (!(expression instanceof TypeExpression)) expression = parseExpression(expression);
+                        value = validateType(value, expression);
+                    }
+                }
+
+                return validateAbstract(abstractValue, expression);
+            }
+
+            return { list, getType, validate: validateStruct }
         }
     })
 
@@ -702,37 +875,69 @@ function SobaInstance(requestedClassId) {
         inherits: {
             "events": 1,
             "util": 1,
-            "interface": 1,
         },
         events: ["completed", "free"],
-        private: function ({ self, events, interface, health, types }) {
+        private: function ({ self, events, interface, types }) {
+
+            function free() {
+                self.events.basic.free.emit();
+            }
 
             const parent = interface.property({
                 value: null,
-                validator: function (newValue) {
-                    types.mustBe(newValue, "@basic:1|null");
+                validator: function(value) {
+                    types.mustBe(value, "@basic:1|null");
+                },
+                trigger: function(newValue, oldValue) {
+                    if (oldValue!==null) oldValue.events.free.off(free);
+                    if (newValue!==null) newValue.events.free.on(free);
                 }
-            })
+            });
 
             events.basic.completed.emit();
+
+            return {parent, free}
         },
-        free: function () {
-            self.events.basic.free.emit();
+        public: function({basic}) {
+            return {parent, free} = basic;
         }
     })
 
     metadataManager.define({
-        name: "objectmanager",
+        name: "platform.abstract",
+        version: 1,
+        inherits: { "basic" : 1 },
+        singleton: true,
+        abstract: true,
+        overload: function({log}) {
+            return {
+                nativeModule: util.functions.notImplemented,
+
+            }
+        }
+    })
+
+    metadataManager.define({
+        name: "core",
         version: 1,
         inherits: { "basic": 1 },
         singleton: true,
-        private: function (shared) {
-            console.log("Objectmanager constructor", shared);
-        },
+        public: function({self}) {
+            
+            function require(classId, initValues) {
+                return new SobaObject(metadataManager.getClassMetadata(classId), initValues);
+            }
+
+            function define(classMetadata) {
+                return metadataManager.define(classMetadata)
+            }
+
+            return {require, define}
+        }
     });
 
     return new SobaObject(metadataManager.getClassMetadata(requestedClassId));
 
 }
 
-console.log(new SobaInstance("objectmanager:1"));
+console.log(new SobaInstance("core:1"));
