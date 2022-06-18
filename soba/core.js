@@ -193,7 +193,6 @@ function SobaInstance(requestedClassId) {
                 },
                 perInheritance: function (classMeta, shared) {
                     if ((typeof classMeta.static === "function") && (!inheritableStaticDataStorage.staticDataExists(classMeta.name))) {
-                        //console.log("Running static for "+classMeta.name)
                         let static = classMeta.static.apply(shared.self, [shared]);
                         inheritableStaticDataStorage.setStaticData(classMeta.classId, static);
                     }
@@ -212,7 +211,7 @@ function SobaInstance(requestedClassId) {
             },
             public: {
                 store: function (value) {
-                    if ((typeof value !== "function") && (value !== null) && (value !== undefined)) throw new Error("Class constructor must be a function or null/undefined");
+                    if ((typeof value !== "function") && (value !== null) && (value !== undefined)) throw new Error("Class public implementation must be a function or null/undefined");
                     return value;
                 },
                 perInheritance: function (classMeta, shared) {
@@ -226,6 +225,26 @@ function SobaInstance(requestedClassId) {
                             value: property,
                             configurable: false,
                             writable: false,
+                        });
+                    }
+                }
+            },
+            overload: {
+                store: function (value) {
+                    if ((typeof value !== "function") && (value !== null) && (value !== undefined)) throw new Error("Class overload implementation must be a function or null/undefined");
+                    return value;
+                },
+                perInheritance: function (classMeta, shared) {
+                    if (!classMeta.overload) return;
+                    let classStaticSpace = inheritableStaticDataStorage.getStaticData(classMeta.classId);
+                    let overloadable = classMeta.overload.apply(shared.self, [shared, classStaticSpace]);
+                    for (let key in overloadable) {
+                        let value = overloadable[key];
+                        if (shared.interface.isProperty(value)) throw new Error("Properties can't be overloadable");
+                        Object.defineProperty(shared.self, key, {
+                            value: value,
+                            configurable: true,
+                            writable: true,
                         });
                     }
                 }
@@ -420,8 +439,6 @@ function SobaInstance(requestedClassId) {
             return {Enum, EnumVariant}
         },
         private: function({}, static) {
-            
-            console.log("hj")
 
             function createEnum() {
                 return new static.Enum(Array.from(arguments));
@@ -432,7 +449,7 @@ function SobaInstance(requestedClassId) {
             }
 
             function isVariantOf(value, enumType) {
-                return ((enums.isEnumVariant(value)) && (value.parent == enumType));
+                return ((isEnumVariant(value)) && (value.parent == enumType));
             }
 
             return {createEnum, isEnumVariant, isVariantOf}
@@ -452,7 +469,7 @@ function SobaInstance(requestedClassId) {
             const logTypes = enums.createEnum("info", "warning", "critical", "fatal");
 
             function LogMessage({ type, message, dump, error }) {
-                if (!enums.isVariantOf(type, static.logTypes)) throw new LogMessage({
+                if (!enums.isVariantOf(type, logTypes)) throw new LogMessage({
                     type: logTypes.critical,
                     message: "Wrong log type specified in log message",
                     dump: { type, message, dump }
@@ -465,43 +482,43 @@ function SobaInstance(requestedClassId) {
 
             function info(message, dump, result) {
                 const logMessage = new static.LogMessage({
-                    type: logTypes.info,
+                    type: static.logTypes.info,
                     message: message,
                     dump: dump,
                 });
-                events.health.debug.emit(self, { logMessage, result });
+                events.log.debug.emit(self, { logMessage, result });
                 return result;
             }
 
             function warning(message, dump, result) {
                 const logMessage = new static.LogMessage({
-                    type: logTypes.warning,
+                    type: static.logTypes.warning,
                     message: message,
                     dump: dump,
                 });
-                events.health.debug.emit(self, { logMessage, result });
+                events.log.debug.emit(self, { logMessage, result });
                 return result;
             }
 
             function critical(err, dump) {
                 const logMessage = new static.LogMessage({
-                    type: logTypes.critical,
+                    type: static.logTypes.critical,
                     message: err.message,
                     dump: dump,
                     error: err
                 });
-                events.health.error.emit(self, { logMessage });
+                events.log.error.emit(self, { logMessage });
                 return err;
             }
 
             function fatal(err, dump) {
                 const logMessage = new static.LogMessage({
-                    type: logTypes.fatal,
+                    type: static.logTypes.fatal,
                     message: message,
                     dump: dump,
                     error: err
                 });
-                events.health.error.emit(self, { logMessage });
+                events.log.error.emit(self, { logMessage });
                 return err;
             }
 
@@ -572,8 +589,8 @@ function SobaInstance(requestedClassId) {
             });
 
             const functions = Object.freeze({
-                notImplemented: function(name) {
-                    return function() { throw log.critical("Function "+ name +" is not implemented", {name})}
+                notImplemented: function(name, arg) {
+                    return function() { throw log.critical("Function "+name+" is not yet implemented", {name, arguments: arg})}
                 },
             })
 
@@ -609,6 +626,7 @@ function SobaInstance(requestedClassId) {
                 this.isPrimitive = !!isPrimitive;
                 if ((validate !== undefined) && (typeof validate !== null) && (typeof validate !== "function")) throw log.critical("Type validator must be a function", arguments);
                 this.validate = ((validate !== undefined) && (typeof validate !== null)) ? validate : defaultValidator;
+                console.log("this, ", this);
                 Object.freeze(this);
             }
 
@@ -620,11 +638,13 @@ function SobaInstance(requestedClassId) {
             const basicTypes = {};
 
             function createTypeMetadata(typeDescription) {
-                if (typeof typeDescription === "function") return new static.TypeMetadata({ create: typeDescription });
-                return new static.TypeMetadata(typeDescription)
+                if (typeof typeDescription === "function") return new TypeMetadata({ create: typeDescription });
+                return new TypeMetadata(typeDescription)
             }
 
             function registerBasicType(typeDescription) {
+                console.log('register', typeDescription)
+                if (!(typeDescription instanceof Object)) throw log.critical("The type description must be an object", arguments)
                 const type = createTypeMetadata(typeDescription);
                 if (basicTypes[type.name] !== undefined) throw log.critical("This type is already registered", arguments);
                 basicTypes[type.name] = type;
@@ -636,7 +656,8 @@ function SobaInstance(requestedClassId) {
 
             const utilStatic = inheritableStaticDataStorage.getStaticData("util:1");    //TODO: find a better solution probably?
             const logStatic = inheritableStaticDataStorage.getStaticData("log:1");
-            registerBasicTypes([utilStatic.Path, utilStatic.Enum, utilStatic.EnumVariant, logStatic.LogMessage]);
+            const enumStatic = inheritableStaticDataStorage.getStaticData("enums:1");
+            registerBasicTypes([utilStatic.Path, enumStatic.Enum, enumStatic.EnumVariant, logStatic.LogMessage]);
             registerBasicTypes([
                 {
                     create: Number,
@@ -694,7 +715,7 @@ function SobaInstance(requestedClassId) {
 
             return { TypeMetadata, basicTypes, createTypeMetadata, TypeExpression }
         },
-        private: function ({ self, log, }, static) {
+        private: function ({ self, log, interface}, static) {
 
             const localTypes = {}
 
@@ -706,6 +727,7 @@ function SobaInstance(requestedClassId) {
             });
 
             function registerType(typeDescription) {
+                if (!(typeDescription instanceof Object)) throw log.critical("The type description must be an object", arguments)
                 const type = static.createTypeMetadata(typeDescription);
                 if (localTypes[type.name] !== undefined) throw log.critical("This type is already registered", arguments);
                 localTypes[type.name] = type;
@@ -865,7 +887,14 @@ function SobaInstance(requestedClassId) {
                 return validateAbstract(abstractValue, expression);
             }
 
-            return { list, getType, validate: validateStruct }
+            function checkFunctionArgumentsType(expression, func) {
+                return function() {
+                    const converted = validateArray(Array.from(arguments), expression);
+                    return func.apply(this, converted);
+                }
+            }
+
+            return { list, getType, validate: validateStruct, function: checkFunctionArgumentsType }
         }
     })
 
@@ -875,6 +904,7 @@ function SobaInstance(requestedClassId) {
         inherits: {
             "events": 1,
             "util": 1,
+            "types": 1
         },
         events: ["completed", "free"],
         private: function ({ self, events, interface, types }) {
@@ -911,8 +941,11 @@ function SobaInstance(requestedClassId) {
         abstract: true,
         overload: function({log}) {
             return {
-                nativeModule: util.functions.notImplemented,
-
+                nativeModule: util.functions.notImplemented("nativeModule", ["moduleName"]),
+                createTimer: util.functions.notImplemented("createTimer"),
+                destroyTimer: util.functions.notImplemented("destroyTimer", ["timerObject"]),
+                loadFile: util.functions.notImplemented("loadFile", ["path"]),
+                output: util.functions.notImplemented("output", ["...objects"])
             }
         }
     })
@@ -922,22 +955,19 @@ function SobaInstance(requestedClassId) {
         version: 1,
         inherits: { "basic": 1 },
         singleton: true,
-        public: function({self}) {
+        public: function({self, types}) {
             
-            function require(classId, initValues) {
+            const require = types.function(["String!", "Object"], (classId, initValues) => {
                 return new SobaObject(metadataManager.getClassMetadata(classId), initValues);
-            }
+            });
 
-            function define(classMetadata) {
+            const define = types.function(["ClassMetadata!"], (classMetadata) => {
                 return metadataManager.define(classMetadata)
-            }
+            });
 
             return {require, define}
         }
     });
 
     return new SobaObject(metadataManager.getClassMetadata(requestedClassId));
-
 }
-
-console.log(new SobaInstance("core:1"));
